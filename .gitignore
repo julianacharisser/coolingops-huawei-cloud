@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+.env
+
+# Large data files
+backend/data/raw/
+backend/ml/artifacts/
+
+# Build info
+*.tsbuildinfo
