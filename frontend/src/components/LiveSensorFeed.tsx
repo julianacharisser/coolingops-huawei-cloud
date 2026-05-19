@@ -3,6 +3,7 @@ import { Gauge } from 'lucide-react';
 import { Line, LineChart, ResponsiveContainer } from 'recharts';
 import { baseSensorReadings, liveFaultLabel } from '../data/mockData';
 import type { SensorReading, Severity } from '../types';
+import { useWebSocket } from '../hooks/useWebSocket';
 import { Panel } from './ui/Panel';
 
 const severityColor: Record<Severity, string> = {
@@ -11,35 +12,67 @@ const severityColor: Record<Severity, string> = {
   critical: '#ff3b3b',
 };
 
-function getSensorSeverity(name: string, value: number, delta: number): Severity {
-  if (name === 'Bypass Valve Position' && value >= 70) return 'critical';
-  if (name === 'Chiller 2 Power' && value >= 545) return 'critical';
-  if (name === 'CHW Return Temp' && value >= 12.7) return 'warning';
-  if (name === 'CW Return Temp' && value >= 33.5) return 'warning';
-  if (name === 'Secondary Pump 1 Flow' && value <= 205) return 'warning';
-  if (name === 'Differential Pressure' && value <= 50) return 'warning';
-  if (Math.abs(delta) > 8) return 'warning';
-  return 'stable';
+type SensorKind = 'temperature' | 'power' | 'flow' | 'fan' | 'valve' | 'pressure';
+
+interface SensorConfig {
+  key: string;
+  kind: SensorKind;
+  displayScale?: number;
 }
 
-function mutateSensors(readings: SensorReading[]) {
-  return readings.map((reading) => {
-    const magnitude = reading.unit === 'kW' || reading.unit === 'rpm' || reading.unit === 'L/s' ? 10 : 0.4;
-    const randomSwing = Number(((Math.random() - 0.5) * magnitude).toFixed(reading.unit === 'C' ? 1 : 0));
-    const precision = reading.unit === 'C' ? 1 : 0;
-    const nextValue = Number((reading.value + randomSwing).toFixed(precision));
-    const nextDelta = Number((nextValue - reading.value).toFixed(precision));
-    const nextHistory = [...reading.history.slice(1), nextValue];
-    const severity = getSensorSeverity(reading.name, nextValue, nextDelta);
+const sensorConfigMap: Record<string, SensorConfig> = {
+  'CHW Supply Temp': { key: 'CWL_PRI_SW_TEMP', kind: 'temperature' },
+  'CHW Return Temp': { key: 'CWL_PRI_RW_TEMP', kind: 'temperature' },
+  'CW Supply Temp': { key: 'CDWL_SW_TEMP', kind: 'temperature' },
+  'CW Return Temp': { key: 'CDWL_RW_TEMP', kind: 'temperature' },
+  'Chiller 1 Power': { key: 'CHL_POW_1', kind: 'power' },
+  'Chiller 2 Power': { key: 'CHL_POW_2', kind: 'power' },
+  'Primary Pump 1 Flow': { key: 'CWL_PRI_CW_FLOW', kind: 'flow' },
+  'Secondary Pump 1 Flow': { key: 'CWL_SEC_CW_FLOW', kind: 'flow' },
+  'Cooling Tower 1 Fan Speed': { key: 'CT_FAN_SPD_1', kind: 'fan' },
+  'Bypass Valve Position': { key: 'TWV_CTRL', kind: 'valve', displayScale: 100 },
+  'Differential Pressure': { key: 'CWL_SEC_DP', kind: 'pressure' },
+  'Outdoor Wet Bulb Temp': { key: 'OA_TEMP_WB', kind: 'temperature' },
+};
 
-    return {
-      ...reading,
-      value: nextValue,
-      delta: nextDelta,
-      severity,
-      history: nextHistory,
-    };
-  });
+function roundOne(value: number) {
+  return Number(value.toFixed(1));
+}
+
+function resolveSeverity(kind: SensorKind, rawValue: number, rawDelta: number): Severity {
+  const delta = Math.abs(rawDelta);
+
+  if (kind === 'temperature') {
+    if (delta > 2.0) return 'critical';
+    if (delta > 1.0) return 'warning';
+    return 'stable';
+  }
+
+  if (kind === 'power') {
+    if (delta > 50) return 'critical';
+    if (delta > 20) return 'warning';
+    return 'stable';
+  }
+
+  if (kind === 'flow') {
+    if (delta > 25) return 'critical';
+    if (delta > 10) return 'warning';
+    return 'stable';
+  }
+
+  if (kind === 'pressure') {
+    if (delta > 15) return 'critical';
+    if (delta > 5) return 'warning';
+    return 'stable';
+  }
+
+  if (kind === 'valve') {
+    if (rawValue > 0.6) return 'critical';
+    if (rawValue > 0.3) return 'warning';
+    return 'stable';
+  }
+
+  return 'stable';
 }
 
 function Sparkline({ reading }: { reading: SensorReading }) {
@@ -61,20 +94,48 @@ function Sparkline({ reading }: { reading: SensorReading }) {
   );
 }
 
-export function LiveSensorFeed({ isSimulating }: { isSimulating: boolean }) {
+export function LiveSensorFeed() {
+  const { lastMessage: sensorMessage } = useWebSocket('sensors');
   const [readings, setReadings] = useState(baseSensorReadings);
+  const [faultLabel, setFaultLabel] = useState(liveFaultLabel);
 
   useEffect(() => {
-    if (!isSimulating) return undefined;
+    if (!sensorMessage || sensorMessage.type !== 'sensor_snapshot') {
+      return;
+    }
 
-    const intervalId = window.setInterval(() => {
-      setReadings((current) => mutateSensors(current));
-    }, 2400);
+    const nextFaultLabel =
+      sensorMessage.fault_label === 'normal'
+        ? 'NORMAL'
+        : String(sensorMessage.fault_label).toUpperCase().replace(/_/g, ' ');
+    setFaultLabel(nextFaultLabel);
 
-    return () => window.clearInterval(intervalId);
-  }, [isSimulating]);
+    const payload = sensorMessage.sensor_data as Record<string, number>;
+    setReadings((current) =>
+      current.map((reading) => {
+        const sensorConfig = sensorConfigMap[reading.name];
+        if (!sensorConfig || !(sensorConfig.key in payload)) {
+          return reading;
+        }
 
-  const feedStatus = liveFaultLabel.toLowerCase() === 'normal';
+        const rawValue = Number(payload[sensorConfig.key]);
+        const displayScale = sensorConfig.displayScale ?? 1;
+        const newValue = roundOne(rawValue * displayScale);
+        const delta = roundOne(newValue - reading.value);
+        const history = [...reading.history.slice(-19), newValue];
+
+        return {
+          ...reading,
+          value: newValue,
+          delta,
+          history,
+          severity: resolveSeverity(sensorConfig.kind, rawValue, rawValue - reading.value / displayScale),
+        };
+      }),
+    );
+  }, [sensorMessage]);
+
+  const feedStatus = faultLabel.toLowerCase() === 'normal';
   const topBadgeClass = feedStatus
     ? 'border-success/30 bg-success/10 text-success'
     : 'border-critical/30 bg-critical/10 text-critical';
@@ -86,7 +147,7 @@ export function LiveSensorFeed({ isSimulating }: { isSimulating: boolean }) {
       action={
         <div className={`flex items-center gap-2 rounded-full border px-3 py-1 text-xs uppercase tracking-[0.16em] ${topBadgeClass}`}>
           <Gauge className="h-4 w-4" />
-          {feedStatus ? 'NORMAL' : liveFaultLabel}
+          {feedStatus ? 'NORMAL' : faultLabel}
         </div>
       }
     >

@@ -1,54 +1,67 @@
+import { useEffect, useState } from 'react';
 import { ActivitySquare } from 'lucide-react';
 import {
-  Area,
-  AreaChart,
   CartesianGrid,
   Line,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
 import { anomalyTimelineData } from '../data/mockData';
+import { useWebSocket } from '../hooks/useWebSocket';
 import { Panel } from './ui/Panel';
 
 export function AnomalyTimeline() {
+  const { lastMessage: alertMessage } = useWebSocket('alerts');
+  const [timelineData, setTimelineData] = useState(anomalyTimelineData);
+  const [anomalyCount, setAnomalyCount] = useState(0);
+
+  useEffect(() => {
+    if (!alertMessage || alertMessage.type !== 'anomaly_event') {
+      return;
+    }
+
+    setAnomalyCount((prev) => {
+      const nextCount = prev + 1;
+      setTimelineData((current) => [
+        ...current.slice(-23),
+        {
+          time: new Date(alertMessage.timestamp).toLocaleTimeString('en-GB', {
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
+          anomalyIndex: nextCount,
+          thermalLoad: 0,
+        },
+      ]);
+      return nextCount;
+    });
+  }, [alertMessage]);
+
   return (
     <Panel
-      title="Anomaly Timeline"
-      subtitle="24-hour anomaly density versus cooling load"
+      title="LIVE ANOMALY HISTORY"
+      subtitle="Rolling backend anomaly events from the plant alert stream"
       action={
         <div className="flex items-center gap-2 text-xs uppercase tracking-[0.16em] text-cyan">
           <ActivitySquare className="h-4 w-4" />
-          Rolling 24h
+          {anomalyCount > 0 ? `${anomalyCount} Alerts` : 'Rolling 24h'}
         </div>
       }
       className="h-[380px]"
     >
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={anomalyTimelineData} margin={{ left: 0, right: 12, top: 8, bottom: 0 }}>
-          <defs>
-            <linearGradient id="anomalyFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#00d4ff" stopOpacity={0.45} />
-              <stop offset="100%" stopColor="#00d4ff" stopOpacity={0.02} />
-            </linearGradient>
-          </defs>
+        <LineChart data={timelineData} margin={{ left: 0, right: 12, top: 8, bottom: 0 }}>
           <CartesianGrid stroke="rgba(31, 41, 55, 0.5)" vertical={false} />
           <XAxis dataKey="time" tick={{ fill: '#6b7280', fontSize: 12 }} axisLine={false} tickLine={false} />
           <YAxis
-            yAxisId="left"
             tick={{ fill: '#6b7280', fontSize: 12 }}
             axisLine={false}
             tickLine={false}
             width={36}
-          />
-          <YAxis
-            yAxisId="right"
-            orientation="right"
-            tick={{ fill: '#6b7280', fontSize: 12 }}
-            axisLine={false}
-            tickLine={false}
-            width={36}
+            label={{ value: 'Anomaly Count', angle: -90, position: 'insideLeft', fill: '#6b7280' }}
           />
           <Tooltip
             cursor={{ stroke: 'rgba(0, 212, 255, 0.35)', strokeWidth: 1 }}
@@ -59,25 +72,15 @@ export function AnomalyTimeline() {
               color: '#f9fafb',
             }}
           />
-          <Area
-            yAxisId="left"
+          <Line
             type="monotone"
             dataKey="anomalyIndex"
             stroke="#00d4ff"
             strokeWidth={2.5}
-            fill="url(#anomalyFill)"
-            activeDot={{ r: 5, stroke: '#0a0f1a', strokeWidth: 2 }}
-          />
-          <Line
-            yAxisId="right"
-            type="monotone"
-            dataKey="thermalLoad"
-            stroke="#ffaa00"
-            strokeWidth={2}
-            dot={{ r: 2, fill: '#ffaa00' }}
+            dot={{ r: 2, fill: '#00d4ff' }}
             activeDot={{ r: 4 }}
           />
-        </AreaChart>
+        </LineChart>
       </ResponsiveContainer>
     </Panel>
   );

@@ -23,6 +23,16 @@ async def list_anomalies() -> dict:
     }
 
 
+@router.patch("/anomalies/{anomaly_id}/acknowledge")
+async def acknowledge_anomaly(anomaly_id: int) -> dict:
+    for event in anomaly_history:
+        if event["id"] == anomaly_id:
+            event["acknowledged"] = True
+            return event
+
+    raise HTTPException(status_code=404, detail=f"Anomaly {anomaly_id} not found")
+
+
 @router.get("/copilot/history")
 async def copilot_history_endpoint() -> dict:
     return {

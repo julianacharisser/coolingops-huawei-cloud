@@ -9,7 +9,7 @@ export interface HeatmapCard {
 }
 
 export interface CopilotEntry {
-  id: string;
+  id: string | number;
   timestamp: string;
   what: string;
   why: string;
@@ -17,27 +17,51 @@ export interface CopilotEntry {
   action: string;
   riskIfDeferred: string;
   reasoning: {
-    stage_a: {
-      component: string;
-      anomaly_score: number;
-      sigma: number;
-    };
-    stage_b: {
-      fault_type: string;
-      top_features: Array<{
-        name: string;
-        value: string;
-      }>;
-      confidence: number;
-    };
-    stage_c: {
-      validated: string;
-      ruled_out: Array<{
-        fault: string;
-        reason: string;
-      }>;
-      confirmed: string;
-    };
+    stage_a:
+      | {
+          component: string;
+          anomaly_score: number;
+          sigma: number;
+        }
+      | {
+          label: string;
+          detail: string;
+          anomaly_score: number;
+          sigma: number;
+        };
+    stage_b:
+      | {
+          fault_type: string;
+          top_features: Array<{
+            name: string;
+            value: string;
+          }>;
+          confidence: number;
+        }
+      | {
+          label: string;
+          detail: string;
+          top_features: Array<{
+            name: string;
+            value: string;
+          }>;
+          confidence: number;
+        };
+    stage_c:
+      | {
+          validated: string;
+          ruled_out: Array<{
+            fault: string;
+            reason: string;
+          }>;
+          confirmed: string;
+        }
+      | {
+          label: string;
+          detail: string;
+          ruled_out: string;
+          confirmed: string;
+        };
   };
 }
 
@@ -58,7 +82,7 @@ export interface SensorReading {
 }
 
 export interface LogEntry {
-  id: string;
+  id: string | number;
   timestamp: string;
   subsystem: string;
   anomaly: string;

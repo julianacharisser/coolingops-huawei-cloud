@@ -1,7 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Bot, Bolt, ChevronRight, AlertTriangle } from 'lucide-react';
 import { copilotEntries } from '../data/mockData';
 import type { CopilotEntry } from '../types';
+import { useWebSocket } from '../hooks/useWebSocket';
+import { getCopilotHistory } from '../services/api';
 import { Panel } from './ui/Panel';
 
 interface ReasoningStage {
@@ -10,48 +12,138 @@ interface ReasoningStage {
   lines: string[];
 }
 
+function getCopilotEntryKey(entry: CopilotEntry, index: number) {
+  return typeof entry.id === 'number' ? `${entry.id}-${entry.timestamp}` : `${entry.id}-${index}`;
+}
+
 function buildReasoningStages(entry: CopilotEntry): ReasoningStage[] {
-  const ruledOutSummary = entry.reasoning.stage_c.ruled_out
-    .map(({ fault, reason }) => `${fault}: ${reason}`)
-    .join(' | ');
+  const stageA =
+    'component' in entry.reasoning.stage_a
+      ? {
+          label: 'STAGE A - ANOMALY DETECTION',
+          lines: [
+            `Flagged ${entry.reasoning.stage_a.component}.`,
+            `Anomaly score ${entry.reasoning.stage_a.anomaly_score.toFixed(2)} with ${entry.reasoning.stage_a.sigma.toFixed(1)} sigma deviation from baseline.`,
+          ],
+        }
+      : {
+          label: entry.reasoning.stage_a.label.toUpperCase(),
+          lines: [
+            entry.reasoning.stage_a.detail,
+            `Anomaly score ${entry.reasoning.stage_a.anomaly_score.toFixed(2)} with ${entry.reasoning.stage_a.sigma.toFixed(1)} sigma deviation from baseline.`,
+          ],
+        };
+
+  const stageB =
+    'fault_type' in entry.reasoning.stage_b
+      ? {
+          label: 'STAGE B - FAULT IDENTIFICATION',
+          lines: [
+            `XGBoost match: ${entry.reasoning.stage_b.fault_type}.`,
+            `Top features: ${entry.reasoning.stage_b.top_features[0]?.name}=${entry.reasoning.stage_b.top_features[0]?.value}; ${entry.reasoning.stage_b.top_features[1]?.name}=${entry.reasoning.stage_b.top_features[1]?.value}.`,
+            `Model confidence ${entry.reasoning.stage_b.confidence}%.`,
+          ],
+        }
+      : {
+          label: entry.reasoning.stage_b.label.toUpperCase(),
+          lines: [
+            entry.reasoning.stage_b.detail,
+            `Top features: ${entry.reasoning.stage_b.top_features[0]?.name}=${entry.reasoning.stage_b.top_features[0]?.value}; ${entry.reasoning.stage_b.top_features[1]?.name}=${entry.reasoning.stage_b.top_features[1]?.value}.`,
+            `Model confidence ${entry.reasoning.stage_b.confidence}%.`,
+          ],
+        };
+
+  const ruledOutSummary =
+    'validated' in entry.reasoning.stage_c
+      ? entry.reasoning.stage_c.ruled_out.map(({ fault, reason }) => `${fault}: ${reason}`).join(' | ')
+      : entry.reasoning.stage_c.ruled_out;
+
+  const stageC =
+    'validated' in entry.reasoning.stage_c
+      ? {
+          label: 'STAGE C - PHYSICS CONSTRAINTS APPLIED',
+          lines: [
+            `Validated: ${entry.reasoning.stage_c.validated}`,
+            `Ruled out: ${ruledOutSummary}`,
+            `Confirmed root cause: ${entry.reasoning.stage_c.confirmed}`,
+          ],
+        }
+      : {
+          label: entry.reasoning.stage_c.label.toUpperCase(),
+          lines: [
+            entry.reasoning.stage_c.detail,
+            `Ruled out: ${entry.reasoning.stage_c.ruled_out}`,
+            `Confirmed root cause: ${entry.reasoning.stage_c.confirmed}`,
+          ],
+        };
 
   return [
-    {
-      id: 'stage-a',
-      label: 'STAGE A \u2014 ANOMALY DETECTION',
-      lines: [
-        `Flagged ${entry.reasoning.stage_a.component}.`,
-        `Anomaly score ${entry.reasoning.stage_a.anomaly_score.toFixed(2)} with ${entry.reasoning.stage_a.sigma.toFixed(1)} sigma deviation from baseline.`,
-      ],
-    },
-    {
-      id: 'stage-b',
-      label: 'STAGE B \u2014 FAULT IDENTIFICATION',
-      lines: [
-        `XGBoost match: ${entry.reasoning.stage_b.fault_type}.`,
-        `Top features: ${entry.reasoning.stage_b.top_features[0]?.name}=${entry.reasoning.stage_b.top_features[0]?.value}; ${entry.reasoning.stage_b.top_features[1]?.name}=${entry.reasoning.stage_b.top_features[1]?.value}.`,
-        `Model confidence ${entry.reasoning.stage_b.confidence}%.`,
-      ],
-    },
-    {
-      id: 'stage-c',
-      label: 'STAGE C \u2014 PHYSICS CONSTRAINTS APPLIED',
-      lines: [
-        `Validated: ${entry.reasoning.stage_c.validated}`,
-        `Ruled out: ${ruledOutSummary}`,
-        `Confirmed root cause: ${entry.reasoning.stage_c.confirmed}`,
-      ],
-    },
+    { id: 'stage-a', ...stageA },
+    { id: 'stage-b', ...stageB },
+    { id: 'stage-c', ...stageC },
   ];
 }
 
+function mapCopilotItem(item: any): CopilotEntry {
+  return {
+    id: item.id,
+    timestamp: new Date(item.timestamp).toLocaleTimeString('en-GB', {
+      hour: '2-digit',
+      minute: '2-digit',
+    }),
+    what: item.what,
+    why: item.why,
+    confidence: Math.round(item.confidence * 100),
+    action: item.action,
+    riskIfDeferred: item.riskIfDeferred,
+    reasoning: item.reasoning,
+  };
+}
+
 export function CopilotPanel() {
+  const { lastMessage: copilotMessage } = useWebSocket('copilot');
+  const [entries, setEntries] = useState<CopilotEntry[]>([copilotEntries[0]]);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const selected = copilotEntries[selectedIndex];
-  const history = copilotEntries
+  const selected = entries[selectedIndex] ?? entries[0];
+  const history = entries
     .map((entry, index) => ({ entry, index }))
     .filter(({ index }) => index !== selectedIndex);
   const reasoningStages = useMemo(() => buildReasoningStages(selected), [selected]);
+
+  const loadCopilotHistory = useCallback(async () => {
+    const response = await getCopilotHistory();
+    if (Array.isArray(response.items) && response.items.length > 0) {
+      setEntries(response.items.map(mapCopilotItem));
+      setSelectedIndex(0);
+    }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    const run = async () => {
+      try {
+        await loadCopilotHistory();
+      } catch {
+        if (!active) return;
+      }
+    };
+
+    void run();
+
+    return () => {
+      active = false;
+    };
+  }, [loadCopilotHistory]);
+
+  useEffect(() => {
+    if (!copilotMessage || copilotMessage.type !== 'copilot_recommendation') {
+      return;
+    }
+
+    setEntries((current) => [mapCopilotItem(copilotMessage), ...current].slice(0, 20));
+    setSelectedIndex(0);
+  }, [copilotMessage]);
 
   return (
     <Panel
@@ -80,7 +172,7 @@ export function CopilotPanel() {
 
         <div className="mt-5">
           <div className="text-xs uppercase tracking-[0.18em] text-muted">Reasoning Trace</div>
-          <div key={selected.id} className="mt-3 space-y-3">
+          <div key={getCopilotEntryKey(selected, selectedIndex)} className="mt-3 space-y-3">
             {reasoningStages.map((stage, index) => {
               const stageDelay = index * 600;
               const checkDelay = stageDelay + 420;
@@ -101,8 +193,8 @@ export function CopilotPanel() {
                     </span>
                   </div>
                   <div className="mt-2 space-y-1.5 font-mono text-xs leading-5 text-muted">
-                    {stage.lines.map((line) => (
-                      <div key={line}>{line}</div>
+                    {stage.lines.map((line, lineIndex) => (
+                      <div key={`${stage.id}-${lineIndex}`}>{line}</div>
                     ))}
                   </div>
                 </div>
@@ -151,7 +243,7 @@ export function CopilotPanel() {
         <div className="scrollbar-thin max-h-[240px] space-y-3 overflow-y-auto pr-1">
           {history.map(({ entry, index }) => (
             <button
-              key={entry.id}
+              key={getCopilotEntryKey(entry, index)}
               type="button"
               onClick={() => setSelectedIndex(index)}
               className="w-full rounded-xl border border-border bg-night/55 p-4 text-left transition hover:border-cyan/30 hover:bg-night/80"

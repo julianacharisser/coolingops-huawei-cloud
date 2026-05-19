@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { AlertOctagon, Play, Snowflake, Square, Waves, Wind } from 'lucide-react';
 import { AnomalyLog } from './components/AnomalyLog';
 import { AnomalyTimeline } from './components/AnomalyTimeline';
 import { ComponentRiskHeatmap } from './components/ComponentRiskHeatmap';
 import { CopilotPanel } from './components/CopilotPanel';
 import { LiveSensorFeed } from './components/LiveSensorFeed';
+import { useWebSocket } from './hooks/useWebSocket';
+import { getSimulationStatus, startDemoSimulation, stopSimulation } from './services/api';
 
 const kpiCards = [
   { label: 'Cooling Efficiency', value: '91.8%', delta: '+1.2%', icon: Snowflake, tone: 'text-success' },
@@ -14,7 +16,32 @@ const kpiCards = [
 ];
 
 export default function App() {
-  const [isSimulating, setIsSimulating] = useState(true);
+  const [isSimulating, setIsSimulating] = useState(false);
+  const { isConnected } = useWebSocket('alerts');
+
+  const syncSimulationStatus = useCallback(async () => {
+    try {
+      const status = await getSimulationStatus();
+      setIsSimulating(Boolean(status.running));
+    } catch {
+      setIsSimulating(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void syncSimulationStatus();
+  }, [syncSimulationStatus]);
+
+  const handleSimulationToggle = useCallback(async () => {
+    if (isSimulating) {
+      await stopSimulation();
+      setIsSimulating(false);
+      return;
+    }
+
+    await startDemoSimulation();
+    setIsSimulating(true);
+  }, [isSimulating]);
 
   return (
     <main className="min-h-screen bg-grid bg-[size:72px_72px]">
@@ -28,14 +55,16 @@ export default function App() {
               <div className="inline-flex items-center gap-2 rounded-full border border-border bg-night/60 px-3 py-1 text-xs uppercase tracking-[0.18em] text-ink">
                 <span
                   className={`h-2.5 w-2.5 rounded-full ${
-                    isSimulating ? 'status-dot-pulse bg-cyan shadow-[0_0_12px_rgba(0,212,255,0.85)]' : 'bg-success shadow-[0_0_12px_rgba(0,255,136,0.85)]'
+                    isConnected
+                      ? 'bg-success shadow-[0_0_12px_rgba(0,255,136,0.85)]'
+                      : 'bg-critical shadow-[0_0_12px_rgba(255,59,59,0.85)]'
                   }`}
                 />
                 System Online
               </div>
               <button
                 type="button"
-                onClick={() => setIsSimulating((current) => !current)}
+                onClick={() => void handleSimulationToggle()}
                 className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] transition ${
                   isSimulating
                     ? 'border-critical/30 bg-critical/10 text-critical hover:bg-critical/15'
@@ -82,7 +111,7 @@ export default function App() {
 
           <div className="grid gap-6">
             <CopilotPanel />
-            <LiveSensorFeed isSimulating={isSimulating} />
+            <LiveSensorFeed />
           </div>
         </div>
       </div>

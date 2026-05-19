@@ -29,3 +29,8 @@ async def healthcheck() -> dict[str, str]:
 @app.websocket("/ws/{channel}")
 async def websocket_channel(websocket: WebSocket, channel: str) -> None:
     await manager.handle_connection(channel, websocket)
+
+
+@app.websocket("/api/ws/{channel}")
+async def websocket_channel_api(websocket: WebSocket, channel: str) -> None:
+    await manager.handle_connection(channel, websocket)

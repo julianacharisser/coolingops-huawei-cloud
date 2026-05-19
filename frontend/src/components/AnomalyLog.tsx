@@ -1,7 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Filter } from 'lucide-react';
 import { anomalyLogData } from '../data/mockData';
-import type { Severity } from '../types';
+import type { LogEntry, Severity } from '../types';
+import { useWebSocket } from '../hooks/useWebSocket';
+import { acknowledgeAnomaly, getAnomalies } from '../services/api';
 import { Panel } from './ui/Panel';
 
 const severityPill: Record<Severity, string> = {
@@ -28,17 +30,96 @@ function rulTone(hours: number) {
   return 'text-success';
 }
 
+function getLogEntryKey(entry: LogEntry, index: number) {
+  return typeof entry.id === 'number' ? `${entry.id}-${entry.timestamp}` : `${entry.id}-${index}`;
+}
+
 export function AnomalyLog() {
+  const { lastMessage: alertMessage } = useWebSocket('alerts');
+  const [logEntries, setLogEntries] = useState(anomalyLogData);
   const [severityFilter, setSeverityFilter] = useState<'all' | Severity>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'investigating' | 'mitigated'>('all');
 
+  const mapAnomalyItem = useCallback(
+    (item: any): LogEntry => ({
+      id: item.id,
+      timestamp: new Date(item.timestamp).toLocaleTimeString('en-GB', {
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+      subsystem: item.component,
+      anomaly: String(item.fault_type).replace(/_/g, ' '),
+      failureProb: Math.round(item.confidence * 100),
+      rulEstimate: Math.round((1 - item.degradation_score) * 300),
+      agent: 'Diagnostic Agent',
+      severity: item.severity === 'critical' || item.severity === 'high' ? 'critical' : 'warning',
+      status: item.acknowledged ? 'mitigated' : 'open',
+    }),
+    [],
+  );
+
+  const loadAnomalies = useCallback(async () => {
+    const response = await getAnomalies();
+    if (Array.isArray(response.items) && response.items.length > 0) {
+      setLogEntries(response.items.map(mapAnomalyItem));
+    }
+  }, [mapAnomalyItem]);
+
+  useEffect(() => {
+    let active = true;
+
+    const run = async () => {
+      try {
+        await loadAnomalies();
+      } catch {
+        if (!active) return;
+      }
+    };
+
+    void run();
+
+    return () => {
+      active = false;
+    };
+  }, [loadAnomalies]);
+
+  useEffect(() => {
+    if (!alertMessage || alertMessage.type !== 'anomaly_event') {
+      return;
+    }
+
+    const nextEntry = mapAnomalyItem(alertMessage);
+    setLogEntries((current) => {
+      const exists = current.some(
+        (entry) => entry.id === nextEntry.id && entry.timestamp === nextEntry.timestamp,
+      );
+      if (exists) {
+        return current;
+      }
+
+      return [nextEntry, ...current].slice(0, 50);
+    });
+  }, [alertMessage, mapAnomalyItem]);
+
   const entries = useMemo(() => {
-    return anomalyLogData.filter((entry) => {
+    return logEntries.filter((entry) => {
       const severityMatch = severityFilter === 'all' || entry.severity === severityFilter;
       const statusMatch = statusFilter === 'all' || entry.status === statusFilter;
       return severityMatch && statusMatch;
     });
-  }, [severityFilter, statusFilter]);
+  }, [logEntries, severityFilter, statusFilter]);
+
+  const handleAcknowledge = useCallback(async (id: number) => {
+    try {
+      await acknowledgeAnomaly(id);
+    } catch {
+      // ignore failed acknowledgement and still allow local UI update
+    }
+
+    setLogEntries((current) =>
+      current.map((entry) => (entry.id === id ? { ...entry, status: 'mitigated' } : entry)),
+    );
+  }, []);
 
   return (
     <Panel
@@ -98,9 +179,9 @@ export function AnomalyLog() {
 
           <div className="mt-3 space-y-2">
             {entries.length > 0 ? (
-              entries.map((entry) => (
+              entries.map((entry, index) => (
                 <button
-                  key={entry.id}
+                  key={getLogEntryKey(entry, index)}
                   type="button"
                   onClick={() => undefined}
                   className="grid w-full grid-cols-[88px_96px_1.1fr_1.2fr_110px_100px_130px_120px] gap-3 rounded-xl border border-border bg-night/55 px-3 py-4 text-left transition hover:border-cyan/30 hover:bg-night/80"
@@ -115,11 +196,18 @@ export function AnomalyLog() {
                   <span className={`font-mono text-sm ${failureProbTone(entry.failureProb)}`}>{entry.failureProb}%</span>
                   <span className={`font-mono text-sm ${rulTone(entry.rulEstimate)}`}>{entry.rulEstimate}</span>
                   <span className="text-sm text-muted">{entry.agent}</span>
-                  <span
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (entry.status !== 'mitigated') {
+                        void handleAcknowledge(Number(entry.id));
+                      }
+                    }}
                     className={`inline-flex w-fit items-center rounded-full border px-3 py-1 text-xs uppercase tracking-[0.18em] ${severityPill[entry.severity]}`}
                   >
-                    {entry.status}
-                  </span>
+                    {entry.status === 'mitigated' ? 'mitigated' : 'acknowledge'}
+                  </button>
                 </button>
               ))
             ) : (

@@ -1,7 +1,9 @@
-import { useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent } from 'react';
 import { heatmapData } from '../data/mockData';
 import type { HeatmapCard, RiskLevel } from '../types';
+import { useWebSocket } from '../hooks/useWebSocket';
+import { getRiskComponents } from '../services/api';
 import { Panel } from './ui/Panel';
 
 const levelStyles: Record<RiskLevel, { badge: string; bar: string; glow: string }> = {
@@ -268,6 +270,43 @@ function formatComponentName(component: string) {
     .join(' ');
 }
 
+function normalizeComponentKey(component: string) {
+  return component.toLowerCase().replace(/\s+/g, '_');
+}
+
+const componentGroupMap: Record<string, string[]> = {
+  chiller: ['chiller_1', 'chiller_2', 'chiller_3'],
+  cooling_tower: ['cooling_tower_1', 'cooling_tower_2', 'cooling_tower_3'],
+  bypass_valve: ['bypass_valve'],
+  secondary_loop: ['pump_secondary_1', 'pump_secondary_2'],
+};
+
+function findComponentIndexes(cards: HeatmapCard[], component: string) {
+  const target = normalizeComponentKey(component);
+  const groupedTargets = componentGroupMap[target];
+
+  if (groupedTargets) {
+    return cards
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => groupedTargets.includes(normalizeComponentKey(item.component)))
+      .map(({ index }) => index);
+  }
+
+  const exactIndexes = cards
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => normalizeComponentKey(item.component) === target)
+    .map(({ index }) => index);
+
+  if (exactIndexes.length > 0) {
+    return exactIndexes;
+  }
+
+  return cards
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => normalizeComponentKey(item.component).startsWith(`${target}_`))
+    .map(({ index }) => index);
+}
+
 function getComponentStyle(item?: HeatmapCard) {
   if (!item) {
     return {
@@ -455,13 +494,13 @@ function ValveIcon({
   );
 }
 
-function DigitalTwinView() {
+function DigitalTwinView({ items }: { items: HeatmapCard[] }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
 
   const componentMap = useMemo(
-    () => new Map(heatmapData.map((item) => [item.component, item])),
-    [],
+    () => new Map(items.map((item) => [item.component, item])),
+    [items],
   );
 
   const handleSelect = (event: MouseEvent<SVGGElement>, component: TwinComponent, item: HeatmapCard) => {
@@ -596,7 +635,93 @@ function DigitalTwinView() {
 }
 
 export function ComponentRiskHeatmap() {
+  const { lastMessage: alertMessage } = useWebSocket('alerts');
+  const [cards, setCards] = useState(heatmapData);
   const [view, setView] = useState<HeatmapView>('ensemble');
+
+  const applyRiskUpdate = useCallback(
+    (component: string, score: number, severity: RiskLevel, updatedAt: string) => {
+      setCards((current) => {
+        const next = [...current];
+        const indexes = findComponentIndexes(next, component);
+        if (indexes.length === 0) {
+          return current;
+        }
+
+        indexes.forEach((index) => {
+          next[index] = {
+            ...next[index],
+            score,
+            severity,
+            updatedAt,
+          };
+        });
+        return next;
+      });
+    },
+    [],
+  );
+
+  const loadRiskComponents = useCallback(async () => {
+    const response = await getRiskComponents();
+    if (!Array.isArray(response.components) || response.components.length === 0) {
+      return;
+    }
+
+    setCards((current) => {
+      const next = [...current];
+      response.components.forEach((item: any) => {
+        findComponentIndexes(next, item.component).forEach((index) => {
+          next[index] = {
+            ...next[index],
+            score: Math.round(item.risk_score * 100),
+            severity: item.severity,
+            updatedAt: new Date(item.last_updated).toLocaleTimeString('en-GB', {
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
+            }),
+          };
+        });
+      });
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    const run = async () => {
+      try {
+        await loadRiskComponents();
+      } catch {
+        if (!active) return;
+      }
+    };
+
+    void run();
+
+    return () => {
+      active = false;
+    };
+  }, [loadRiskComponents]);
+
+  useEffect(() => {
+    if (!alertMessage || alertMessage.type !== 'anomaly_event') {
+      return;
+    }
+
+    applyRiskUpdate(
+      alertMessage.component,
+      Math.round(alertMessage.degradation_score * 100),
+      alertMessage.severity,
+      new Date(alertMessage.timestamp).toLocaleTimeString('en-GB', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      }),
+    );
+  }, [alertMessage, applyRiskUpdate]);
 
   return (
     <Panel
@@ -631,7 +756,7 @@ export function ComponentRiskHeatmap() {
     >
       {view === 'ensemble' ? (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {heatmapData.map((item) => {
+          {cards.map((item) => {
             const tone = levelStyles[item.severity];
 
             return (
@@ -668,7 +793,7 @@ export function ComponentRiskHeatmap() {
           })}
         </div>
       ) : (
-        <DigitalTwinView />
+        <DigitalTwinView items={cards} />
       )}
     </Panel>
   );
