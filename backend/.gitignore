@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+data/raw/
+ml/artifacts/root_cause_classifier_inference/
