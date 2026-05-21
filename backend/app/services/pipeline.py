@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import hmac
+import json
+import os
+import time
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 import pandas as pd
 
@@ -101,10 +109,15 @@ METADATA_FIELDS = {"timestamp", "Datetime", "fault_label", "scenario_id"}
 rolling_window: deque[dict[str, float]] = deque(maxlen=ROLLING_WINDOW_SIZE)
 anomaly_history: list[dict[str, Any]] = []
 copilot_history: list[dict[str, Any]] = []
+latest_sensor_snapshot: dict[str, Any] | None = None
+_smn_last_sent: dict[str, float] = {}
+_SMN_COOLDOWN_SECONDS = 10 * 60
 
 
 def reset_pipeline_state(clear_history: bool = True) -> None:
+    global latest_sensor_snapshot
     rolling_window.clear()
+    latest_sensor_snapshot = None
     if clear_history:
         anomaly_history.clear()
         copilot_history.clear()
@@ -198,6 +211,9 @@ def _build_anomaly_event(
         "degradation_score": degradation_score,
         "severity": _severity(degradation_score),
         "acknowledged": False,
+        "assigned_to": None,
+        "status": "open",
+        "feedback": None,
     }
 
 
@@ -264,6 +280,177 @@ def _build_copilot_recommendation(
     }
 
 
+def _clean_env(name: str, default: str | None = None) -> str | None:
+    value = os.getenv(name, default)
+    if value is None:
+        return None
+    return value.strip().strip('"').strip("'")
+
+
+def _smn_settings() -> dict[str, str | None]:
+    return {
+        "topic_urn": _clean_env("SMN_TOPIC_URN"),
+        "project_id": _clean_env("SMN_PROJECT_ID"),
+        "access_key": _clean_env("HUAWEI_AK"),
+        "secret_key": _clean_env("HUAWEI_SK"),
+        "region": _clean_env("SMN_REGION", "ap-southeast-3"),
+        "dashboard_url": _clean_env("DASHBOARD_URL", "http://localhost:5173"),
+    }
+
+
+def _sha256_hex(value: bytes | str) -> str:
+    payload = value.encode("utf-8") if isinstance(value, str) else value
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _build_smn_subject(component: str) -> str:
+    return f"\U0001F6A8 CRITICAL FAULT: {component} \u2014 Immediate Action Required"
+
+
+def _build_smn_message(
+    anomaly_event: dict[str, Any],
+    recommendation: dict[str, Any],
+    dashboard_url: str,
+) -> str:
+    return (
+        "CoolingOps has detected a critical fault.\n\n"
+        f"Component: {anomaly_event['component']}\n"
+        f"Fault: {anomaly_event['fault_type']}\n"
+        f"Current Risk: {anomaly_event['degradation_score'] * 100:.0f}%\n"
+        f"Confidence: {anomaly_event['confidence'] * 100:.0f}%\n"
+        f"Recommended Action: {recommendation['action']}\n\n"
+        f"Open Dashboard: {dashboard_url}\n\n"
+        "This is an automated alert from CoolingOps."
+    )
+
+
+def _build_smn_authorization(
+    method: str,
+    canonical_uri: str,
+    host: str,
+    content_type: str,
+    payload_bytes: bytes,
+    x_sdk_date: str,
+    access_key: str,
+    secret_key: str,
+) -> str:
+    signed_headers = "content-type;host;x-sdk-date"
+    canonical_headers = (
+        f"content-type:{content_type}\n"
+        f"host:{host}\n"
+        f"x-sdk-date:{x_sdk_date}"
+    )
+    canonical_request = (
+        f"{method}\n"
+        f"{canonical_uri}\n"
+        "\n"
+        f"{canonical_headers}\n"
+        "\n"
+        f"{signed_headers}\n"
+        f"{_sha256_hex(payload_bytes)}"
+    )
+    string_to_sign = f"SDK-HMAC-SHA256\n{x_sdk_date}\n{_sha256_hex(canonical_request)}"
+    signature = hmac.new(
+        secret_key.encode("utf-8"),
+        string_to_sign.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return (
+        "SDK-HMAC-SHA256 "
+        f"Access={access_key}, "
+        f"SignedHeaders={signed_headers}, "
+        f"Signature={signature}"
+    )
+
+
+def _send_signed_smn_request(
+    url: str,
+    canonical_uri: str,
+    payload: dict[str, str],
+    access_key: str,
+    secret_key: str,
+) -> None:
+    payload_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    content_type = "application/json"
+    host = url.split("/")[2]
+    x_sdk_date = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    authorization = _build_smn_authorization(
+        method="POST",
+        canonical_uri=canonical_uri,
+        host=host,
+        content_type=content_type,
+        payload_bytes=payload_bytes,
+        x_sdk_date=x_sdk_date,
+        access_key=access_key,
+        secret_key=secret_key,
+    )
+    request = Request(
+        url,
+        data=payload_bytes,
+        method="POST",
+        headers={
+            "Content-Type": content_type,
+            "Host": host,
+            "X-Sdk-Date": x_sdk_date,
+            "Authorization": authorization,
+        },
+    )
+    with urlopen(request, timeout=10) as response:
+        if response.status >= 400:
+            raise RuntimeError(f"SMN publish failed with status {response.status}")
+
+
+def _publish_smn_notification(
+    anomaly_event: dict[str, Any],
+    recommendation: dict[str, Any],
+) -> bool:
+    if anomaly_event.get("severity") != "critical":
+        return False
+    if float(anomaly_event.get("confidence") or 0.0) < 0.75:
+        return False
+
+    settings = _smn_settings()
+    topic_urn = settings["topic_urn"]
+    project_id = settings["project_id"]
+    access_key = settings["access_key"]
+    secret_key = settings["secret_key"]
+    region = settings["region"] or "ap-southeast-3"
+    dashboard_url = settings["dashboard_url"] or "http://localhost:5173"
+
+    if not topic_urn:
+        return False
+    if not project_id or not access_key or not secret_key:
+        return False
+
+    fault_type = str(anomaly_event.get("fault_type") or "unknown")
+    now = time.time()
+    last_sent = _smn_last_sent.get(fault_type)
+    if last_sent is not None and now - last_sent < _SMN_COOLDOWN_SECONDS:
+        return False
+
+    encoded_topic_urn = quote(topic_urn, safe="")
+    canonical_uri = f"/v2/{project_id}/notifications/topics/{encoded_topic_urn}/publish"
+    url = f"https://smn.{region}.myhuaweicloud.com{canonical_uri}"
+    payload = {
+        "subject": _build_smn_subject(anomaly_event["component"]),
+        "message": _build_smn_message(anomaly_event, recommendation, dashboard_url),
+    }
+
+    try:
+        _send_signed_smn_request(
+            url=url,
+            canonical_uri=canonical_uri,
+            payload=payload,
+            access_key=access_key,
+            secret_key=secret_key,
+        )
+    except Exception:
+        return False
+
+    _smn_last_sent[fault_type] = now
+    return True
+
+
 def build_risk_components() -> dict[str, list[dict[str, Any]]]:
     latest_by_component: dict[str, dict[str, Any]] = {}
     for event in anomaly_history:
@@ -282,7 +469,20 @@ def build_risk_components() -> dict[str, list[dict[str, Any]]]:
     return {"components": components}
 
 
+def get_latest_sensor_snapshot() -> dict[str, Any] | None:
+    if latest_sensor_snapshot is None:
+        return None
+    return {
+        "type": latest_sensor_snapshot.get("type"),
+        "timestamp": latest_sensor_snapshot.get("timestamp"),
+        "fault_label": latest_sensor_snapshot.get("fault_label"),
+        "sensor_data": dict(latest_sensor_snapshot.get("sensor_data", {})),
+    }
+
+
 async def run_pipeline(row: dict[str, Any]) -> dict[str, Any] | None:
+    global latest_sensor_snapshot
+
     timestamp = _normalize_timestamp(row.get("timestamp") or row.get("Datetime"))
     fault_label = str(row.get("fault_label") or "normal")
     sensor_data = _extract_sensor_data(row)
@@ -293,6 +493,7 @@ async def run_pipeline(row: dict[str, Any]) -> dict[str, Any] | None:
         "fault_label": fault_label,
         "sensor_data": sensor_data,
     }
+    latest_sensor_snapshot = sensor_snapshot
     await manager.broadcast("sensors", sensor_snapshot)
 
     if not sensor_data:
@@ -325,6 +526,7 @@ async def run_pipeline(row: dict[str, Any]) -> dict[str, Any] | None:
     recommendation = _build_copilot_recommendation(anomaly_event, gate_scores)
     copilot_history.append(recommendation)
     await manager.broadcast("copilot", {"type": "copilot_recommendation", **recommendation})
+    await asyncio.to_thread(_publish_smn_notification, anomaly_event, recommendation)
 
     return {
         "anomaly_event": anomaly_event,
