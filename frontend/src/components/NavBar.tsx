@@ -5,8 +5,8 @@ import { startDemoSimulation, stopSimulation } from '../services/api';
 interface NavBarProps {
   onStartReplay: () => void;
   onStopReplay: () => void;
-  onTriggerWarning: () => void;
-  onRevealFault: () => void;
+  onTriggerWarning?: () => void;
+  onRevealFault?: () => void;
   isSimulating: boolean;
   isConnected: boolean;
 }
@@ -45,12 +45,12 @@ export function NavBar({
 
   const handleTriggerWarning = useCallback(() => {
     setTriggerWarning(true);
-    onTriggerWarning();
+    onTriggerWarning?.();
   }, [onTriggerWarning]);
 
   const handleRevealFault = useCallback(() => {
     setRevealFault(true);
-    onRevealFault();
+    onRevealFault?.();
   }, [onRevealFault]);
 
   return (

@@ -4,6 +4,7 @@ import { AlertTriangle, CheckCircle2, Timer, Zap } from 'lucide-react';
 interface PredictionPanelProps {
   latestAlert: any;
   latestCopilot: any;
+  className?: string;
 }
 
 const sensorTagMap: Record<string, string[]> = {
@@ -91,7 +92,7 @@ function getSensorTags(latestAlert: any) {
   return Array.from(tags);
 }
 
-export function PredictionPanel({ latestAlert, latestCopilot }: PredictionPanelProps) {
+export function PredictionPanel({ latestAlert, latestCopilot, className = '' }: PredictionPanelProps) {
   const leadTimeMinutes = useMemo(() => getLeadTimeMinutes(latestAlert), [latestAlert]);
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
 
@@ -167,15 +168,12 @@ export function PredictionPanel({ latestAlert, latestCopilot }: PredictionPanelP
   ];
 
   return (
-    <div className="h-full rounded-[28px] border border-cyan/20 bg-[#0d1524] p-5 shadow-[0_0_0_1px_rgba(0,212,255,0.06)]">
+    <div className={`h-full rounded-[28px] border border-cyan/20 bg-[#0d1524] p-5 shadow-[0_0_0_1px_rgba(0,212,255,0.06)] ${className}`}>
       <div className="flex h-full flex-col gap-5">
         <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="text-xs uppercase tracking-[0.22em] text-cyan">Prediction</div>
-            <div className="mt-2 text-sm text-muted">Escalation forecast and validation stack</div>
-          </div>
-          <div className={`rounded-full border px-3 py-1 text-xs uppercase tracking-[0.18em] ${badgeClass}`}>
-            {latestAlert?.severity === 'critical' ? 'Predicted Critical' : 'Monitoring'}
+          <div className="mb-5">
+            <h2 className="mt-2 text-xl font-semibold text-ink">Prediction Accuracy Summary</h2>
+            <div className="mt-2 text-sm text-muted">Escalation forecast and validation stack.</div>
           </div>
         </div>
 
@@ -225,11 +223,6 @@ export function PredictionPanel({ latestAlert, latestCopilot }: PredictionPanelP
           )}
         </div>
 
-        <div>
-          <div className="text-xs uppercase tracking-[0.18em] text-muted">Why</div>
-          <div className="mt-2 text-sm leading-6 text-muted">{whyText}</div>
-        </div>
-
         <div className="rounded-2xl border border-cyan/30 bg-cyan/10 px-4 py-4">
           <div className="flex items-start gap-3">
             <Zap className="mt-0.5 h-4 w-4 shrink-0 text-cyan" />
@@ -248,6 +241,11 @@ export function PredictionPanel({ latestAlert, latestCopilot }: PredictionPanelP
           </div>
         </div>
 
+        <div>
+          <div className="text-xs uppercase tracking-[0.18em] text-muted">Why</div>
+          <div className="mt-2 text-sm leading-6 text-muted">{whyText}</div>
+        </div>
+        
         <div>
           <div className="text-xs uppercase tracking-[0.18em] text-muted">Reasoning Trace</div>
           <div className="mt-3 space-y-3">

@@ -13,6 +13,7 @@ interface AlertLike {
 interface PlantSchematicProps {
   latestAlert: any;
   allAlerts: any[];
+  className?: string;
 }
 
 interface PlantComponent {
@@ -216,7 +217,7 @@ function ComponentIcon({ component, severity }: { component: PlantComponent; sev
   return <PumpIcon x={component.x} y={component.y} stroke={tone.stroke} fill={tone.fill} critical={critical} />;
 }
 
-export function PlantSchematic({ latestAlert, allAlerts }: PlantSchematicProps) {
+export function PlantSchematic({ latestAlert, allAlerts, className = '' }: PlantSchematicProps) {
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
 
   const componentStates = useMemo(
@@ -230,7 +231,7 @@ export function PlantSchematic({ latestAlert, allAlerts }: PlantSchematicProps) 
   const leadTime = latestAlert?.lead_time_minutes ?? '--';
 
   return (
-    <div className="relative overflow-hidden rounded-[28px] border border-border bg-[#0d1524] p-4">
+    <div className={`relative overflow-hidden rounded-[28px] border border-border bg-[#0d1524] p-4 ${className}`}>
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(0,212,255,0.18),transparent_28%),radial-gradient(circle_at_bottom_right,rgba(255,59,59,0.12),transparent_24%)]" />
       <div className="relative">
         {latestAlert ? (
@@ -240,12 +241,9 @@ export function PlantSchematic({ latestAlert, allAlerts }: PlantSchematicProps) 
         ) : null}
 
         <div className="mb-4 flex items-center justify-between">
-          <div>
-            <div className="text-xs uppercase tracking-[0.18em] text-muted">Plant Schematic</div>
-            <div className="mt-1 text-sm text-ink">Industrial equipment map with live risk overlays and flow direction</div>
-          </div>
-          <div className="rounded-full border border-cyan/20 bg-cyan/10 px-3 py-1 font-mono text-xs text-cyan">
-            {latestAlert ? `Tracking ${latestAlert.component}` : 'No active escalation'}
+          <div className="mb-5">
+            <h2 className="mt-2 text-xl font-semibold text-ink">Digital Twin</h2>
+            <div className="mt-2 text-sm text-muted">Live 3D replica fed by real-time sensor data to monitor performance, simulate scenarios, and predict faults.</div>
           </div>
         </div>
 

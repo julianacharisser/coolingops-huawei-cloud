@@ -103,9 +103,7 @@ export function CopilotChat({ latestAlert, latestCopilot }: CopilotChatProps) {
     <div className="rounded-[30px] border border-border bg-panel/88 p-5 shadow-[0_0_0_1px_rgba(255,255,255,0.02),0_24px_60px_rgba(0,0,0,0.24)] backdrop-blur-sm">
       <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <div className="text-[11px] uppercase tracking-[0.24em] text-cyan">Section 2</div>
           <h2 className="mt-2 flex items-center gap-2 text-xl font-semibold text-ink">
-            <span>{'\u{1F916}'}</span>
             <span>AI Copilot</span>
           </h2>
         </div>

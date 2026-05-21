@@ -1,250 +1,126 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
-import {
-  acknowledgeAnomaly,
-  getAnomalies,
-  getCopilotHistory,
-  getFeedbackSummary,
-  getSimulationStatus,
-} from './services/api';
-import { AccuracySummary } from './components/AccuracySummary';
-import { KPIStrip } from './components/KPIStrip';
+import { acknowledgeAnomaly, getAnomalies, getSimulationStatus } from './services/api';
 import { NavBar } from './components/NavBar';
-import { CopilotChat } from './components/CopilotChat';
-import { AnomalyLogWithFeedback } from './components/AnomalyLogWithFeedback';
+import { KPIStrip } from './components/KPIStrip';
 import { PlantSchematic } from './components/PlantSchematic';
 import { PredictionPanel } from './components/PredictionPanel';
-
-type Severity = 'low' | 'medium' | 'high' | 'critical';
-
-interface AlertStreamMessage {
-  type: 'anomaly_event';
-  id: number;
-  timestamp: string;
-  component: string;
-  fault_type: string;
-  confidence: number;
-  gate_scores: Record<string, number>;
-  degradation_score: number;
-  severity: Severity;
-  acknowledged: boolean;
-}
-
-interface CopilotReasoningStageA {
-  label: string;
-  detail: string;
-  anomaly_score: number;
-  sigma: number;
-}
-
-interface CopilotReasoningStageB {
-  label: string;
-  detail: string;
-  top_features: Array<{ name: string; value: string }>;
-  confidence: number;
-}
-
-interface CopilotReasoningStageC {
-  label: string;
-  detail: string;
-  ruled_out: string;
-  confirmed: string;
-}
-
-interface CopilotMessage {
-  type: 'copilot_recommendation';
-  id: number;
-  timestamp: string;
-  what: string;
-  why: string;
-  confidence: number;
-  action: string;
-  riskIfDeferred: string;
-  degradation_score: number;
-  reasoning: {
-    stage_a: CopilotReasoningStageA;
-    stage_b: CopilotReasoningStageB;
-    stage_c: CopilotReasoningStageC;
-  };
-}
-
-function SectionCard({
-  title,
-  eyebrow,
-  action,
-  children,
-  className = '',
-}: {
-  title: string;
-  eyebrow: string;
-  action?: ReactNode;
-  children: ReactNode;
-  className?: string;
-}) {
-  return (
-    <section
-      className={`rounded-[30px] border border-border bg-panel/88 p-5 shadow-[0_0_0_1px_rgba(255,255,255,0.02),0_24px_60px_rgba(0,0,0,0.24)] backdrop-blur-sm ${className}`}
-    >
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="text-[11px] uppercase tracking-[0.24em] text-cyan">{eyebrow}</div>
-          <h2 className="mt-2 text-xl font-semibold text-ink">{title}</h2>
-        </div>
-        {action}
-      </div>
-      {children}
-    </section>
-  );
-}
+import { CopilotChat } from './components/CopilotChat';
+import { AnomalyLogWithFeedback } from './components/AnomalyLogWithFeedback';
+import { AccuracySummary } from './components/AccuracySummary';
 
 export default function App() {
-  const [isSimulating, setIsSimulating] = useState(false);
-  const [anomalies, setAnomalies] = useState<AlertStreamMessage[]>([]);
-  const [copilotEntries, setCopilotEntries] = useState<CopilotMessage[]>([]);
-  const [feedbackSummary, setFeedbackSummary] = useState<any>(null);
-  const [warningTriggered, setWarningTriggered] = useState(false);
-  const [faultRevealed, setFaultRevealed] = useState(false);
-
-  const { isConnected } = useWebSocket('sensors');
-  const { lastMessage: alertMessage } = useWebSocket('alerts');
+  const { lastMessage: alertMessage, isConnected } = useWebSocket('alerts');
   const { lastMessage: copilotMessage } = useWebSocket('copilot');
 
-  const syncSimulationStatus = useCallback(async () => {
-    try {
-      const status = await getSimulationStatus();
-      setIsSimulating(Boolean(status.running));
-    } catch {
-      setIsSimulating(false);
-    }
-  }, []);
+  const [anomalies, setAnomalies] = useState<any[]>([]);
+  const [latestAlert, setLatestAlert] = useState<any>(null);
+  const [latestCopilot, setLatestCopilot] = useState<any>(null);
+  const [isSimulating, setIsSimulating] = useState(false);
 
-  const loadBootData = useCallback(async () => {
-    try {
-      const [anomalyResponse, copilotResponse, feedbackResponse] = await Promise.all([
-        getAnomalies(),
-        getCopilotHistory(),
-        getFeedbackSummary().catch(() => null),
-      ]);
+  useEffect(() => {
+    void getAnomalies()
+      .then((data) => {
+        const items = Array.isArray(data?.items) ? data.items : [];
+        setAnomalies(items);
+        setLatestAlert(items[0] ?? null);
+      })
+      .catch(() => {
+        setAnomalies([]);
+        setLatestAlert(null);
+      });
 
-      if (Array.isArray(anomalyResponse.items)) {
-        setAnomalies(anomalyResponse.items.slice(0, 16));
-      }
-
-      if (Array.isArray(copilotResponse.items)) {
-        setCopilotEntries(copilotResponse.items.slice(0, 10));
-      }
-
-      if (feedbackResponse) {
-        setFeedbackSummary(feedbackResponse);
-      }
-    } catch {
-      // keep the dashboard resilient while the backend warms up
-    }
-  }, []);
-
-  const refreshFeedbackSummary = useCallback(async () => {
-    try {
-      const summary = await getFeedbackSummary();
-      setFeedbackSummary(summary);
-    } catch {
-      // keep demo summary visible if the backend summary endpoint is unavailable
-    }
+    void getSimulationStatus()
+      .then((status) => setIsSimulating(Boolean(status?.running)))
+      .catch(() => setIsSimulating(false));
   }, []);
 
   useEffect(() => {
-    void syncSimulationStatus();
-    void loadBootData();
-  }, [loadBootData, syncSimulationStatus]);
-
-  useEffect(() => {
-    const message = alertMessage as AlertStreamMessage | null;
-    if (!message || message.type !== 'anomaly_event') {
+    if (!alertMessage) {
       return;
     }
 
-    setAnomalies((current) => [message, ...current.filter((item) => item.id !== message.id)].slice(0, 16));
+    setLatestAlert(alertMessage);
+    setAnomalies((prev) => [alertMessage, ...prev.filter((item) => item.id !== alertMessage.id)].slice(0, 50));
   }, [alertMessage]);
 
   useEffect(() => {
-    const message = copilotMessage as CopilotMessage | null;
-    if (!message || message.type !== 'copilot_recommendation') {
+    if (!copilotMessage) {
       return;
     }
 
-    setCopilotEntries((current) => [message, ...current.filter((item) => item.id !== message.id)].slice(0, 10));
+    setLatestCopilot(copilotMessage);
   }, [copilotMessage]);
+
+  const handleStart = useCallback(() => {
+    setIsSimulating(true);
+  }, []);
+
+  const handleStop = useCallback(() => {
+    setIsSimulating(false);
+  }, []);
 
   const handleAcknowledge = useCallback(async (id: number) => {
     try {
       await acknowledgeAnomaly(id);
     } catch {
-      // keep the UI responsive even if the backend call fails
+      // keep local UI responsive even if the backend is unavailable
     }
 
-    setAnomalies((current) =>
-      current.map((item) => (item.id === id ? { ...item, acknowledged: true } : item)),
+    setAnomalies((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, acknowledged: true } : item)),
+    );
+    setLatestAlert((current: any) =>
+      current?.id === id ? { ...current, acknowledged: true } : current,
     );
   }, []);
 
-  const latestAlert = anomalies[0] ?? null;
-  const latestCopilot = copilotEntries[0] ?? null;
-
   return (
-    <main className="min-h-screen bg-grid bg-[size:64px_64px] text-ink">
+    <main className="min-h-screen scroll-smooth bg-grid bg-[size:64px_64px] text-ink">
       <div className="mx-auto flex max-w-[1500px] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
         <NavBar
           isConnected={isConnected}
           isSimulating={isSimulating}
-          onStartReplay={() => setIsSimulating(true)}
-          onStopReplay={() => setIsSimulating(false)}
-          onTriggerWarning={() => setWarningTriggered(true)}
-          onRevealFault={() => setFaultRevealed(true)}
+          onStartReplay={handleStart}
+          onStopReplay={handleStop}
         />
 
-        {(warningTriggered || faultRevealed) ? (
-          <section className="flex flex-wrap gap-3">
-            {warningTriggered ? (
-              <div className="rounded-full border border-warning/30 bg-warning/10 px-3 py-1.5 text-xs uppercase tracking-[0.18em] text-warning">
-                Early warning mode armed
-              </div>
-            ) : null}
-            {faultRevealed ? (
-              <div className="rounded-full border border-cyan/30 bg-cyan/10 px-3 py-1.5 text-xs uppercase tracking-[0.18em] text-cyan">
-                Actual fault reveal active
-              </div>
-            ) : null}
-          </section>
-        ) : null}
+        <div className="border-t border-border/60 pt-6">
+          <KPIStrip anomalies={anomalies} latestAlert={latestAlert} />
+        </div>
 
-        <KPIStrip anomalies={anomalies} latestAlert={latestAlert} />
+        <div className="border-t border-border/60 pt-6">
+          <div className="flex flex-col gap-4 xl:flex-row">
+            <PlantSchematic
+              latestAlert={latestAlert}
+              allAlerts={anomalies}
+              className="xl:w-2/3"
+            />
+            <PredictionPanel
+              latestAlert={latestAlert}
+              latestCopilot={latestCopilot}
+              className="xl:w-1/3"
+            />
+          </div>
+        </div>
 
-        <section className="grid gap-6">
-          <SectionCard eyebrow="Section 1" title="Main Dashboard">
-            <div className="grid gap-5 xl:grid-cols-[1.25fr_0.75fr]">
-              <PlantSchematic latestAlert={latestAlert} allAlerts={anomalies} />
-              <PredictionPanel latestAlert={latestAlert} latestCopilot={latestCopilot} />
-            </div>
-          </SectionCard>
-          <CopilotChat latestAlert={latestAlert} latestCopilot={latestCopilot} />
-        </section>
+        <div className="border-t border-border/60 pt-6">
+          <CopilotChat
+            latestAlert={latestAlert}
+            latestCopilot={latestCopilot}
+          />
+        </div>
 
-        <SectionCard
-          eyebrow="Section 3"
-          title="Anomaly Log And Feedback"
-          action={
-            <div className="rounded-full border border-border bg-[#0d1524] px-3 py-1.5 text-xs uppercase tracking-[0.18em] text-muted">
-              {anomalies.length} tracked events
-            </div>
-          }
-        >
+        <div className="border-t border-border/60 pt-6">
           <AnomalyLogWithFeedback
             anomalies={anomalies}
             onAcknowledge={handleAcknowledge}
-            onFeedbackSubmitted={() => void refreshFeedbackSummary()}
           />
-        </SectionCard>
-        <AccuracySummary feedbackSummary={feedbackSummary} />
+        </div>
+
+        <div className="border-t border-border/60 pt-6">
+          <AccuracySummary />
+        </div>
       </div>
     </main>
   );

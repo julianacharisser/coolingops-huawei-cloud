@@ -45,7 +45,6 @@ export function AccuracySummary({ feedbackSummary }: AccuracySummaryProps) {
   return (
     <section className="rounded-[30px] border border-border bg-panel/88 p-5 shadow-[0_0_0_1px_rgba(255,255,255,0.02),0_24px_60px_rgba(0,0,0,0.24)] backdrop-blur-sm">
       <div className="mb-5">
-        <div className="text-[11px] uppercase tracking-[0.24em] text-cyan">Section 4</div>
         <h2 className="mt-2 text-xl font-semibold text-ink">Prediction Accuracy Summary</h2>
       </div>
 
