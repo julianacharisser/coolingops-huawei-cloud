@@ -27,3 +27,6 @@ export const getCopilotLatest = () =>
 
 export const getRiskComponents = () =>
   fetch(`${BASE_URL}/api/risk/components`).then((r) => r.json());
+
+export const getFeedbackSummary = () =>
+  fetch(`${BASE_URL}/api/feedback/summary`).then((r) => r.json());
