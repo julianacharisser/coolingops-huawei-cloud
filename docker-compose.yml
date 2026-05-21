@@ -1,0 +1,21 @@
+services:
+  backend:
+    build: ./backend
+    container_name: coolingops-backend
+    env_file:
+      - ./backend/.env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/data:/app/data
+      - ./backend/ml/artifacts:/app/ml/artifacts
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: coolingops-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped

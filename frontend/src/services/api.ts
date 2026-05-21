@@ -1,4 +1,8 @@
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const rawBaseUrl = import.meta.env.VITE_API_URL;
+const BASE_URL =
+  rawBaseUrl !== undefined
+    ? rawBaseUrl
+    : 'http://localhost:8000';
 
 export const startDemoSimulation = () =>
   fetch(`${BASE_URL}/api/simulation/demo`, { method: 'POST' }).then((r) => r.json());

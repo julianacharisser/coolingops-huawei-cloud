@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-const WS_BASE = import.meta.env.VITE_WS_URL || 'ws://localhost:8000';
+const rawWsBase = import.meta.env.VITE_WS_URL;
+const WS_BASE =
+  rawWsBase !== undefined
+    ? rawWsBase
+    : 'ws://localhost:8000';
 
 export function useWebSocket(channel: 'sensors' | 'alerts' | 'copilot') {
   const [lastMessage, setLastMessage] = useState<any>(null);
