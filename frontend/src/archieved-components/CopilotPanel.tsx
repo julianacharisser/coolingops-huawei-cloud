@@ -154,7 +154,6 @@ export function CopilotPanel() {
       <div className="rounded-2xl border border-border bg-night/70 p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-cyan">
-            <Bot className="h-4 w-4" />
             AI Copilot
           </div>
           <div className="flex items-center gap-3">

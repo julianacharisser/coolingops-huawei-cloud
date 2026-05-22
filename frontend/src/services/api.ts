@@ -1,4 +1,8 @@
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const rawBaseUrl = import.meta.env.VITE_API_URL;
+const BASE_URL =
+  rawBaseUrl !== undefined
+    ? rawBaseUrl
+    : 'http://localhost:8000';
 
 export const startDemoSimulation = () =>
   fetch(`${BASE_URL}/api/simulation/demo`, { method: 'POST' }).then((r) => r.json());
@@ -23,3 +27,6 @@ export const getCopilotLatest = () =>
 
 export const getRiskComponents = () =>
   fetch(`${BASE_URL}/api/risk/components`).then((r) => r.json());
+
+export const getFeedbackSummary = () =>
+  fetch(`${BASE_URL}/api/feedback/summary`).then((r) => r.json());
